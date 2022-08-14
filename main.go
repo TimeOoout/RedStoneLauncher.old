@@ -3,12 +3,15 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"crypto/sha256"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/winterssy/sreq"
 	"io"
+	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -19,7 +22,6 @@ import (
 // assetsindex_files
 var indexassets_waitgroup sync.WaitGroup
 var system_info = runtime.GOOS
-var batchCh = make(chan struct{}, 10)
 
 func main() {
 	//Default返回一个默认的路由引擎
@@ -93,24 +95,49 @@ func main() {
 		/*创建资源索引文件*/
 		assetIndex_url := gjson.Get(version_file_content, "assetIndex.url").String()
 		assetIndex_file_content, _ := sreq.Get(assetIndex_url).Text()
-		os.MkdirAll(".minecraft/assets/indexes/", os.ModePerm)
-		assetIndex_file, _ := os.OpenFile(".minecraft/assets/indexes/"+"/"+mcver+".json", os.O_CREATE|os.O_TRUNC, 0666)
-		func() {
-			indexassets_waitgroup.Add(1)
-			bufWriter := bufio.NewWriter(assetIndex_file)
-			bufWriter.WriteString(assetIndex_file_content)
-			bufWriter.Flush()
-			defer assetIndex_file.Close()
-			indexassets_waitgroup.Done()
-		}()
+		_, err := os.Stat(".minecraft/assets/indexes/" + "/" + mcver + ".json")
+		if err == nil {
+			f, _ := ioutil.ReadFile(".minecraft/assets/indexes/" + "/" + mcver + ".json")
+			if sha256.Sum256(f) != sha256.Sum256([]byte(assetIndex_file_content)) {
+				os.MkdirAll(".minecraft/assets/indexes/", os.ModePerm)
+				assetIndex_file, _ := os.OpenFile(".minecraft/assets/indexes/"+"/"+mcver+".json", os.O_CREATE|os.O_TRUNC, 0666)
+				func() {
+					indexassets_waitgroup.Add(1)
+					bufWriter := bufio.NewWriter(assetIndex_file)
+					bufWriter.WriteString(assetIndex_file_content)
+					bufWriter.Flush()
+					defer assetIndex_file.Close()
+					indexassets_waitgroup.Done()
+				}()
+				/*Objects文件下载*/
+				obj_num := gjson.Get(assetIndex_file_content, "objects")
+				obj_num.ForEach(func(key, value gjson.Result) bool {
+					hash := gjson.Get(value.String(), "hash").String()
+					go download_obj(hash)
+					return true
+				})
+			}
+		} else {
+			os.MkdirAll(".minecraft/assets/indexes/", os.ModePerm)
+			assetIndex_file, _ := os.OpenFile(".minecraft/assets/indexes/"+"/"+mcver+".json", os.O_CREATE|os.O_TRUNC, 0666)
+			func() {
+				indexassets_waitgroup.Add(1)
+				bufWriter := bufio.NewWriter(assetIndex_file)
+				bufWriter.WriteString(assetIndex_file_content)
+				bufWriter.Flush()
+				defer assetIndex_file.Close()
+				indexassets_waitgroup.Done()
 
-		/*Objects文件下载*/
-		obj_num := gjson.Get(assetIndex_file_content, "objects")
-		obj_num.ForEach(func(key, value gjson.Result) bool {
-			hash := gjson.Get(value.String(), "hash").String()
-			go download_obj(hash)
-			return true
-		})
+			}()
+			/*Objects文件下载*/
+			obj_num := gjson.Get(assetIndex_file_content, "objects")
+			obj_num.ForEach(func(key, value gjson.Result) bool {
+				hash := gjson.Get(value.String(), "hash").String()
+				go download_obj(hash)
+				return true
+			})
+		}
+
 		/*依赖库文件下载*/
 		os.MkdirAll(".minecraft/libraries/", os.ModePerm)
 		os.MkdirAll(".minecraft/versions/"+c.PostForm("VersionName")+"/natives", os.ModePerm)
@@ -119,18 +146,47 @@ func main() {
 			go download_library(gjson.Get(version_file_content, "libraries."+strconv.Itoa(i)).String(), c.PostForm("VersionName"))
 		}
 		//下载主文件
-		go download_assets(c.PostForm("VersionName"), gjson.Get(version_file_content, "downloads.client.url").String(), c.PostForm("MCVersion"))
+		go download_assets(c.PostForm("VersionName"), gjson.Get(version_file_content, "downloads.client.url").String(), c.PostForm("MCVersion"), gjson.Get(version_file_content, "logging.client.file.url").String())
 
 		indexassets_waitgroup.Wait()
 		os.Remove(".minecraft/versions/" + c.PostForm("VersionName") + "/natives/native.jar")
 	})
+
+	//启动MineCraft
+	r.POST("/execute", func(c *gin.Context) {
+		java_path := "D:\\Java\\jdk1.8.0_291\\bin\\javaw.exe"
+		version := c.PostForm("MCVersion")
+		version_name := c.PostForm("VersionName")
+		user_name := c.PostForm("UserName")
+		uuid := c.PostForm("Uuid")
+		f, _ := ioutil.ReadFile(".minecraft/versions/" + version_name + "/" + version + ".json")
+		cp_path_num, _ := strconv.Atoi(gjson.Get(string(f), "libraries.#").String())
+		cp_path := ""
+		for i := 0; i < cp_path_num; i++ {
+			if !gjson.Get(string(f), "libraries."+strconv.Itoa(i)+".downloads.classifiers").Exists() {
+				if i != cp_path_num-1 {
+					cp_path += "D:/GolangFiles/RedStoneLauncher/.minecraft/libraries/" + gjson.Get(string(f), "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String() + ";"
+				} else {
+					cp_path += "D:/GolangFiles/RedStoneLauncher/.minecraft/libraries/" + gjson.Get(string(f), "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String()
+				}
+			}
+		}
+		command := java_path + " -XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump -Dos.name=\"Windows 10\" -Dos.version=10.0 -Xss1M -Djava.library.path=D:/GolangFiles/RedStoneLauncher/.minecraft/versions/" + version_name + "/natives -Dminecraft.launcher.brand=RedStone_Launcher -Dminecraft.launcher.version=0.0.1 -cp \"" + cp_path + "\" -Xmx2G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M -Dlog4j.configurationFile=D:/GolangFiles/RedStoneLauncher/.minecraft/versions/" + version_name + "/log4j.xml net.minecraft.client.main.Main --username " + user_name + " --version " + version + " --gameDir " + "D:/GolangFiles/RedStoneLauncher/.minecraft" + version_name + "/ --assetsDir " + "D:/GolangFiles/RedStoneLauncher/.minecraft/assets" + " --assetIndex " + version + " --uuid " + uuid + " --accessToken " + "7d097a96e2284d08af44368493044839" + " --userType Legacy --versionType RedStoneLauncher --width 854 --height 480"
+		cmd_file, _ := os.OpenFile("command.txt", os.O_CREATE|os.O_TRUNC, 0666)
+		cmd_file.WriteString(command)
+		cmd_file.Close()
+		fmt.Print(command)
+		cmd := exec.Command("cmd.exe", "/C", "launcher.bat")
+		go cmd.Start()
+	})
+
 	/*
 		运行代理
 	*/
 	r.Run(":30713")
 }
 
-func download_assets(version_name string, url string, v string) {
+func download_assets(version_name string, url string, v string, log4j string) {
 	indexassets_waitgroup.Add(1)
 	asset_content, _ := sreq.Get(url).Content()
 	asset_file, _ := os.OpenFile(".minecraft/versions/"+version_name+"/"+v+".jar", os.O_CREATE|os.O_TRUNC, 0666)
@@ -139,6 +195,10 @@ func download_assets(version_name string, url string, v string) {
 	bufWriter.Flush()
 	defer asset_file.Close()
 
+	log4j_content, _ := sreq.Get(log4j).Content()
+	log4j_file, _ := os.OpenFile(".minecraft/versions/"+version_name+"/log4j.xml", os.O_CREATE|os.O_TRUNC, 0666)
+	log4j_file.Write(log4j_content)
+	defer log4j_file.Close()
 	indexassets_waitgroup.Done()
 	runtime.Gosched()
 }
@@ -164,16 +224,17 @@ func download_library(h string, v string) {
 	lib_filename := path_list[len(path_list)-1]
 	path_list = path_list[:len(path_list)-1]
 	path := strings.Join(path_list, "/")
-
-	os.MkdirAll(".minecraft/libraries/"+path, os.ModePerm)
-	lib_url := gjson.Get(h, "downloads.artifact.url").String()
-	lib_content, _ := sreq.Get(lib_url).Content()
-	lib_file, _ := os.OpenFile(".minecraft/libraries/"+path+"/"+lib_filename, os.O_CREATE|os.O_TRUNC, 0666)
-	bufWriter := bufio.NewWriter(lib_file)
-	bufWriter.Write(lib_content)
-	bufWriter.Flush()
-	defer lib_file.Close()
-
+	_, err := os.Stat(".minecraft/libraries/" + path + "/" + lib_filename)
+	if os.IsNotExist(err) {
+		os.MkdirAll(".minecraft/libraries/"+path, os.ModePerm)
+		lib_url := gjson.Get(h, "downloads.artifact.url").String()
+		lib_content, _ := sreq.Get(lib_url).Content()
+		lib_file, _ := os.OpenFile(".minecraft/libraries/"+path+"/"+lib_filename, os.O_CREATE|os.O_TRUNC, 0666)
+		bufWriter := bufio.NewWriter(lib_file)
+		bufWriter.Write(lib_content)
+		bufWriter.Flush()
+		defer lib_file.Close()
+	}
 	if gjson.Get(h, "downloads.classifiers").String() != "" {
 		var native_url string
 		if system_info == "windows" {
