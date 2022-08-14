@@ -111,15 +111,15 @@ func main() {
 			go download_obj(hash)
 			return true
 		})
-		///*依赖库文件下载*/
-		//os.MkdirAll(".minecraft/libraries/", os.ModePerm)
-		//os.MkdirAll(".minecraft/versions/"+c.PostForm("VersionName")+"/natives", os.ModePerm)
-		//lib_num, _ := strconv.Atoi(gjson.Get(version_file_content, "libraries.#").String())
-		//for i := 0; i < lib_num; i++ {
-		//	go download_library(gjson.Get(version_file_content, "libraries."+strconv.Itoa(i)).String(), c.PostForm("VersionName"))
-		//}
+		/*依赖库文件下载*/
+		os.MkdirAll(".minecraft/libraries/", os.ModePerm)
+		os.MkdirAll(".minecraft/versions/"+c.PostForm("VersionName")+"/natives", os.ModePerm)
+		lib_num, _ := strconv.Atoi(gjson.Get(version_file_content, "libraries.#").String())
+		for i := 0; i < lib_num; i++ {
+			go download_library(gjson.Get(version_file_content, "libraries."+strconv.Itoa(i)).String(), c.PostForm("VersionName"))
+		}
 		//下载主文件
-		//go download_assets(c.PostForm("VersionName"), gjson.Get(version_file_content, "downloads.client.url").String(), c.PostForm("Version"))
+		go download_assets(c.PostForm("VersionName"), gjson.Get(version_file_content, "downloads.client.url").String(), c.PostForm("MCVersion"))
 
 		indexassets_waitgroup.Wait()
 		os.Remove(".minecraft/versions/" + c.PostForm("VersionName") + "/natives/native.jar")
