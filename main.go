@@ -4,8 +4,10 @@ import (
 	"archive/zip"
 	"bufio"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"github.com/imroc/req"
 	"github.com/tidwall/gjson"
 	"github.com/winterssy/sreq"
 	"io"
@@ -17,16 +19,18 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // assetsindex_files
 var indexassets_waitgroup sync.WaitGroup
 var system_info = runtime.GOOS
+var system_arch = runtime.GOARCH
 
 func main() {
 	//Default返回一个默认的路由引擎
 	r := gin.Default()
-
+	req.SetTimeout(time.Second * 40)
 	//验证代理是否存在
 	r.POST("/is_exist", func(c *gin.Context) {
 		fmt.Printf("[SYSTEM]: " + "INFO: Verify presence." + "\n")
@@ -113,7 +117,7 @@ func main() {
 				obj_num := gjson.Get(assetIndex_file_content, "objects")
 				obj_num.ForEach(func(key, value gjson.Result) bool {
 					hash := gjson.Get(value.String(), "hash").String()
-					go download_obj(hash)
+					download_obj(hash)
 					return true
 				})
 			}
@@ -127,13 +131,12 @@ func main() {
 				bufWriter.Flush()
 				defer assetIndex_file.Close()
 				indexassets_waitgroup.Done()
-
 			}()
 			/*Objects文件下载*/
 			obj_num := gjson.Get(assetIndex_file_content, "objects")
 			obj_num.ForEach(func(key, value gjson.Result) bool {
 				hash := gjson.Get(value.String(), "hash").String()
-				go download_obj(hash)
+				download_obj(hash)
 				return true
 			})
 		}
@@ -143,41 +146,129 @@ func main() {
 		os.MkdirAll(".minecraft/versions/"+c.PostForm("VersionName")+"/natives", os.ModePerm)
 		lib_num, _ := strconv.Atoi(gjson.Get(version_file_content, "libraries.#").String())
 		for i := 0; i < lib_num; i++ {
-			go download_library(gjson.Get(version_file_content, "libraries."+strconv.Itoa(i)).String(), c.PostForm("VersionName"))
+			download_library(gjson.Get(version_file_content, "libraries."+strconv.Itoa(i)).String(), c.PostForm("VersionName"))
 		}
 		//下载主文件
-		go download_assets(c.PostForm("VersionName"), gjson.Get(version_file_content, "downloads.client.url").String(), c.PostForm("MCVersion"), gjson.Get(version_file_content, "logging.client.file.url").String())
+		download_log4j(gjson.Get(version_file_content, "downloads.client.url").String(), c.PostForm("VersionName"), c.PostForm("MCVersion"), gjson.Get(version_file_content, "logging.client.file.url").String())
+		download_main(c.PostForm("VersionName"), c.PostForm("MCVersion"))
+		//indexassets_waitgroup.Wait()
 
-		indexassets_waitgroup.Wait()
-		os.Remove(".minecraft/versions/" + c.PostForm("VersionName") + "/natives/native.jar")
 	})
 
 	//启动MineCraft
 	r.POST("/execute", func(c *gin.Context) {
-		java_path := "D:\\Java\\jdk1.8.0_291\\bin\\javaw.exe"
+		java_path := "'D:\\JavaJDK\\bin\\java.exe' "
 		version := c.PostForm("MCVersion")
 		version_name := c.PostForm("VersionName")
+		indexes, _ := ioutil.ReadFile(".minecraft/assets/indexes/" + version + ".json")
+		indexes_content := string(indexes)
+		indexes_obj := gjson.Get(indexes_content, "objects")
+		indexes_obj.ForEach(func(key, value gjson.Result) bool {
+			hash := gjson.Get(value.String(), "hash").String()
+			download_obj(hash)
+			return true
+		})
+		indexassets_waitgroup.Wait()
 		user_name := c.PostForm("UserName")
-		uuid := c.PostForm("Uuid")
 		f, _ := ioutil.ReadFile(".minecraft/versions/" + version_name + "/" + version + ".json")
-		cp_path_num, _ := strconv.Atoi(gjson.Get(string(f), "libraries.#").String())
+		version_json := string(f)
+		cp_path_num, _ := strconv.Atoi(gjson.Get(version_json, "libraries.#").String())
 		cp_path := ""
 		for i := 0; i < cp_path_num; i++ {
-			if !gjson.Get(string(f), "libraries."+strconv.Itoa(i)+".downloads.classifiers").Exists() {
-				if i != cp_path_num-1 {
-					cp_path += "D:/GolangFiles/RedStoneLauncher/.minecraft/libraries/" + gjson.Get(string(f), "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String() + ";"
+			if gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".downloads.classifiers").Exists() == false {
+				if gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules").Exists() {
+
+					fmt.Print(gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules.0.os.name").String())
+
+					if gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules.0.action").String() == "allow" {
+						if gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules.1").Exists() {
+							if gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules.1.os.name").String() == system_info && gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules.1.action").String() == "allow" {
+								cp_path += "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\libraries\\" + strings.ReplaceAll(gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String(), "/", "\\") + ";"
+							} else {
+								cp_path += "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\libraries\\" + strings.ReplaceAll(gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String(), "/", "\\") + ";"
+							}
+						} else {
+							if gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".rules.0.os.name").String() == system_info {
+								cp_path += "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\libraries\\" + strings.ReplaceAll(gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String(), "/", "\\") + ";"
+							}
+						}
+					}
 				} else {
-					cp_path += "D:/GolangFiles/RedStoneLauncher/.minecraft/libraries/" + gjson.Get(string(f), "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String()
+					cp_path += "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\libraries\\" + strings.ReplaceAll(gjson.Get(version_json, "libraries."+strconv.Itoa(i)+".downloads.artifact.path").String(), "/", "\\") + ";"
 				}
 			}
 		}
-		command := java_path + " -XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump -Dos.name=\"Windows 10\" -Dos.version=10.0 -Xss1M -Djava.library.path=D:/GolangFiles/RedStoneLauncher/.minecraft/versions/" + version_name + "/natives -Dminecraft.launcher.brand=RedStone_Launcher -Dminecraft.launcher.version=0.0.1 -cp \"" + cp_path + "\" -Xmx2G -XX:+UnlockExperimentalVMOptions -XX:+UseG1GC -XX:G1NewSizePercent=20 -XX:G1ReservePercent=20 -XX:MaxGCPauseMillis=50 -XX:G1HeapRegionSize=32M -Dlog4j.configurationFile=D:/GolangFiles/RedStoneLauncher/.minecraft/versions/" + version_name + "/log4j.xml net.minecraft.client.main.Main --username " + user_name + " --version " + version + " --gameDir " + "D:/GolangFiles/RedStoneLauncher/.minecraft" + version_name + "/ --assetsDir " + "D:/GolangFiles/RedStoneLauncher/.minecraft/assets" + " --assetIndex " + version + " --uuid " + uuid + " --accessToken " + "7d097a96e2284d08af44368493044839" + " --userType Legacy --versionType RedStoneLauncher --width 854 --height 480"
-		cmd_file, _ := os.OpenFile("command.txt", os.O_CREATE|os.O_TRUNC, 0666)
-		cmd_file.WriteString(command)
+		cp_path += "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\versions\\" + version_name + "\\" + version + ".jar"
+		java_cmd := "&" + java_path
+		if gjson.Get(version_json, "arguments").Exists() {
+
+			if system_info == "windows" {
+				if gjson.Get(version_json, "arguments.jvm.1.rules.0.action").String() == "allow" {
+					java_cmd += "'-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump' "
+				}
+				if gjson.Get(version_json, "arguments.jvm.2.rules.0.action").String() == "allow" {
+					java_cmd += "'-Dos.name=Windows 10' '-Dos.version=10.0' "
+				}
+			}
+			if system_info == "osx" {
+				if gjson.Get(version_json, "arguments.jvm.0.rules.0.action").String() == "allow" {
+					java_cmd += "'-XstartOnFirstThread' "
+				}
+			}
+			if system_arch == "x86" {
+				if gjson.Get(version_json, "arguments.jvm.3.rules.0.action").String() == "allow" {
+					java_cmd += "'-Xss1M' "
+				}
+			}
+		} else {
+			if system_info == "windows" {
+				java_cmd += "'-XX:HeapDumpPath=MojangTricksIntelDriversForPerformance_javaw.exe_minecraft.exe.heapdump' "
+				//java_cmd += "'-Dos.name=Windows 10' '-Dos.version=10.0'"
+			}
+			if system_info == "osx" {
+				java_cmd += "'-XstartOnFirstThread' "
+			}
+			if system_arch == "x86" {
+				java_cmd += "'-Xss1M' "
+			}
+		}
+
+		java_cmd += "'-Djava.library.path=" + "\"D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\versions\\" + version_name + "\\natives\"" + "' "
+		java_cmd += "'-Dminecraft.launcher.brand=RSL' '-Dminecraft.launcher.version=0.0.1" + "' "
+		java_cmd += "'-cp' '" + cp_path + "' "
+
+		if gjson.Get(version_json, "arguments.game.23.rules.0.features.is_demo_user").String() == "true" {
+			java_cmd += "'" + gjson.Get(version_json, "arguments.game.23.value").String() + "' "
+		}
+
+		java_cmd += "'" + gjson.Get(version_json, "mainClass").String() + "' "
+		java_cmd += "'--username' '" + user_name + "' "
+		java_cmd += "'--version' '" + version + "' "
+		java_cmd += "'--gameDir' '" + "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\versions\\" + version_name + "\\" + "' "
+		java_cmd += "'--assetsDir' '" + "D:\\GolangFiles\\RedStoneLauncher\\.minecraft\\assets" + "' "
+		java_cmd += "'--assetIndex' '" + version + "' "
+		uuid_hash := sha256.New()
+		byte_username := []byte(user_name)
+		uuid_hash.Write(byte_username)
+		uuid_bytes := uuid_hash.Sum(nil)
+		uuid_str := hex.EncodeToString(uuid_bytes)
+		java_cmd += "'--uuid' '" + uuid_str + "' "
+		java_cmd += "'--accessToken' '" + "723ac913833a460ab0cde964c1ae8983" + "' "
+		java_cmd += "'--userType' '" + "Legacy" + "' "
+		java_cmd += "'--versionType' '" + "RSL" + "' "
+		java_cmd += " '--userProperties' '{}' "
+		if gjson.Get(version_json, "arguments.game.24.rules.0.features.has_custom_resolution").String() == "true" && gjson.Get(version_json, "arguments.game.24.rules.0.action").String() == "allow" {
+			java_cmd += "'--width' " + "'854'" + "' "
+			java_cmd += "'--height' " + "'480'" + "' "
+		}
+
+		cmd_file, _ := os.OpenFile("command.ps1", os.O_CREATE|os.O_TRUNC, 0666)
+		cmd_file.WriteString(java_cmd)
 		cmd_file.Close()
-		fmt.Print(command)
-		cmd := exec.Command("cmd.exe", "/C", "launcher.bat")
-		go cmd.Start()
+		fmt.Print(java_cmd)
+
+		cmd := exec.Command(java_cmd)
+		cmd.Run()
 	})
 
 	/*
@@ -186,55 +277,143 @@ func main() {
 	r.Run(":30713")
 }
 
-func download_assets(version_name string, url string, v string, log4j string) {
-	indexassets_waitgroup.Add(1)
-	asset_content, _ := sreq.Get(url).Content()
-	asset_file, _ := os.OpenFile(".minecraft/versions/"+version_name+"/"+v+".jar", os.O_CREATE|os.O_TRUNC, 0666)
-	bufWriter := bufio.NewWriter(asset_file)
-	bufWriter.Write(asset_content)
-	bufWriter.Flush()
-	defer asset_file.Close()
-
-	log4j_content, _ := sreq.Get(log4j).Content()
-	log4j_file, _ := os.OpenFile(".minecraft/versions/"+version_name+"/log4j.xml", os.O_CREATE|os.O_TRUNC, 0666)
-	log4j_file.Write(log4j_content)
-	defer log4j_file.Close()
-	indexassets_waitgroup.Done()
-	runtime.Gosched()
+func download_main(version_name string, v string, retry_times ...int) bool {
+	retry := 3
+	if len(retry_times) > 0 {
+		if retry_times[0] > 0 {
+			retry = retry_times[0]
+		}
+	}
+	asset_content, err := req.Get("https://bmclapi2.bangbang93.com/version/" + v + "/client")
+	if err != nil {
+		for i := 0; i < retry; i++ {
+			asset_content_, err := req.Get("https://bmclapi2.bangbang93.com/version/" + v + "/client")
+			if err != nil {
+				continue
+			}
+			asset_content = asset_content_
+			goto WRITE
+		}
+		fmt.Print("\n Download main file failed! FILE:" + "https://bmclapi2.bangbang93.com/version/" + v + "/client" + " | ERROR:" + err.Error() + "\n")
+		return false
+	}
+WRITE:
+	erro := asset_content.ToFile(".minecraft/versions/" + version_name + "/" + v + ".jar")
+	if erro != nil {
+		for i := 0; i < retry; i++ {
+			erro := asset_content.ToFile(".minecraft/versions/" + version_name + "/" + v + ".jar")
+			if erro != nil {
+				continue
+			}
+			return true
+		}
+		fmt.Print("\n Write main file failed! FILE:" + "https://bmclapi2.bangbang93.com/version/" + v + "/client" + " | ERROR:" + err.Error() + "\n")
+		return false
+	}
+	return false
 }
 
-func download_obj(h string) {
+func download_log4j(url string, version_name string, v string, log4j string, retry_times ...int) bool {
 	indexassets_waitgroup.Add(1)
-	os.MkdirAll(".minecraft/assets/objects/"+h[0:2], os.ModePerm)
-	obj_file_content, _ := sreq.Get("http://resources.download.minecraft.net/" + h[0:2] + "/" + h).Content()
-	obj_file, _ := os.OpenFile(".minecraft/assets/objects/"+h[0:2]+"/"+h, os.O_CREATE|os.O_TRUNC, 0666)
-	bufWriter := bufio.NewWriter(obj_file)
-	bufWriter.Write(obj_file_content)
-	bufWriter.Flush()
-	defer obj_file.Close()
+	defer indexassets_waitgroup.Done()
+	defer runtime.Gosched()
+	retry := 3
+	if len(retry_times) > 0 {
+		if retry_times[0] > 0 {
+			retry = retry_times[0]
+		}
+	}
+	log4j_content, err := req.Get(log4j)
+	if err != nil {
+		for i := 0; i < retry; i++ {
+			if err != nil {
+				continue
+			}
+			break
+		}
+	}
+	if err != nil {
+		fmt.Print("\n Download log4j file failed! FILE:" + log4j + " | ERROR:" + err.Error() + "\n")
+		return false
+	}
+	erro := log4j_content.ToFile(".minecraft/versions/" + version_name + "/log4j2.xml")
+	if erro != nil {
+		for i := 0; i < retry; i++ {
+			erro := log4j_content.ToFile(".minecraft/versions/" + version_name + "/log4j2.xml")
+			if erro != nil {
+				continue
+			}
+			return true
+		}
+		fmt.Print("\n Write log4j file failed! FILE:" + log4j + " | ERROR:" + erro.Error() + "\n")
+		return false
+	}
 
-	indexassets_waitgroup.Done()
-	runtime.Gosched()
+	return true
 }
 
-func download_library(h string, v string) {
+func download_obj(h string, retry_times ...int) bool {
 	indexassets_waitgroup.Add(1)
+	defer indexassets_waitgroup.Done()
+	defer runtime.Gosched()
+	retry := 3
+	if len(retry_times) > 0 {
+		if retry_times[0] > 0 {
+			retry = retry_times[0]
+		}
+	}
+	_, err := os.Stat(".minecraft/assets/objects/" + h[0:2] + "/" + h)
+	if os.IsNotExist(err) {
+		os.MkdirAll(".minecraft/assets/objects/"+h[0:2], os.ModePerm)
+		obj_file_content, err := req.Get("http://resources.download.minecraft.net/" + h[0:2] + "/" + h)
+		if err != nil {
+			for i := 0; i < retry; i++ {
+				obj_file_content_, err := req.Get("http://resources.download.minecraft.net/" + h[0:2] + "/" + h)
+				if err != nil {
+					continue
+				}
+				obj_file_content = obj_file_content_
+				goto WRITE
+			}
+			fmt.Print("\n Download assets files failed! FILE:" + "http://resources.download.minecraft.net/" + h[0:2] + "/" + h + " | ERROR:" + err.Error() + "\n")
+			return false
+		}
+	WRITE:
+		erro := obj_file_content.ToFile(".minecraft/assets/objects/" + h[0:2] + "/" + h)
+		if erro != nil {
+			for i := 0; i < retry; i++ {
+				erro := obj_file_content.ToFile(".minecraft/assets/objects/" + h[0:2] + "/" + h)
+				if erro != nil {
+					continue
+				}
+				return true
+			}
+			fmt.Print("\n Write assets files failed! FILE:" + "http://resources.download.minecraft.net/" + h[0:2] + "/" + h + " | ERROR:" + erro.Error() + "\n")
+			return false
+		}
+
+	}
+	return true
+}
+
+func download_library(h string, v string, retry_times ...int) bool {
+	retry := 3
+	if len(retry_times) > 0 {
+		if retry_times[0] > 0 {
+			retry = retry_times[0]
+		}
+	}
+
+	indexassets_waitgroup.Add(1)
+	defer indexassets_waitgroup.Done()
+	defer runtime.Gosched()
 	path_ := gjson.Get(h, "downloads.artifact.path").String()
+	lib_url := gjson.Get(h, "downloads.artifact.url").String()
 	path_list := strings.Split(path_, "/")
 	lib_filename := path_list[len(path_list)-1]
 	path_list = path_list[:len(path_list)-1]
 	path := strings.Join(path_list, "/")
-	_, err := os.Stat(".minecraft/libraries/" + path + "/" + lib_filename)
-	if os.IsNotExist(err) {
-		os.MkdirAll(".minecraft/libraries/"+path, os.ModePerm)
-		lib_url := gjson.Get(h, "downloads.artifact.url").String()
-		lib_content, _ := sreq.Get(lib_url).Content()
-		lib_file, _ := os.OpenFile(".minecraft/libraries/"+path+"/"+lib_filename, os.O_CREATE|os.O_TRUNC, 0666)
-		bufWriter := bufio.NewWriter(lib_file)
-		bufWriter.Write(lib_content)
-		bufWriter.Flush()
-		defer lib_file.Close()
-	}
+
 	if gjson.Get(h, "downloads.classifiers").String() != "" {
 		var native_url string
 		if system_info == "windows" {
@@ -244,23 +423,83 @@ func download_library(h string, v string) {
 		} else {
 			native_url = gjson.Get(h, "downloads.classifiers.natives-linux.url").String()
 		}
-		native_content, _ := sreq.Get(native_url).Content()
-		native_file, _ := os.OpenFile(".minecraft/versions/"+v+"/natives/native.jar", os.O_CREATE|os.O_TRUNC, 0666)
-		bufWriter2 := bufio.NewWriter(native_file)
-		bufWriter2.Write(native_content)
-		bufWriter2.Flush()
-		defer native_file.Close()
-		go Unzip(".minecraft/versions/"+v+"/natives/native.jar", ".minecraft/versions/"+v+"/natives/")
+		native_content, err := req.Get(native_url)
+		if err != nil {
+			for i := 1; i < retry; i++ {
+				native_content_, err := req.Get(native_url)
+				if err != nil {
+					continue
+				}
+				native_content = native_content_
+				goto WRITE
+			}
+		}
+	WRITE:
+		if err != nil {
+			fmt.Print("\n Download native files failed! FILE:" + native_url + " | ERROR:" + err.Error() + "\n")
+			return false
+		}
+		uuid_hash := sha256.New()
+		byte_username := []byte(native_url)
+		uuid_hash.Write(byte_username)
+		uuid_bytes := uuid_hash.Sum(nil)
+		uuid_str := hex.EncodeToString(uuid_bytes)
+		for i := 0; i < retry; i++ {
+			if native_content.ToFile(".minecraft/versions/"+v+"/natives/"+uuid_str) != nil {
+				continue
+			}
+			goto UNZIP
+		}
+		fmt.Print("Write native files failed! FILE:" + lib_url + " | ERROR:" + err.Error() + "\n")
+		return false
+	UNZIP:
+		Unzip(".minecraft/versions/"+v+"/natives/"+uuid_str, ".minecraft/versions/"+v+"/natives/")
+		os.Remove(".minecraft/versions/" + v + "/natives/" + uuid_str)
+		files, _ := ioutil.ReadDir(".minecraft/versions/" + v + "/natives/")
+		for _, f := range files {
+			if f.Name()[len(f.Name())-4:] == ".git" {
+				os.Remove(".minecraft/versions/" + v + "/natives/" + f.Name())
+			} else if f.Name()[len(f.Name())-5:] == ".sha1" {
+				os.Remove(".minecraft/versions/" + v + "/natives/" + f.Name())
+			}
+		}
+
+	} else {
+		os.MkdirAll(".minecraft/libraries/"+path, os.ModePerm)
+		lib_content, erro := req.Get(strings.ReplaceAll(lib_url, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/maven/"))
+		if erro != nil {
+			for i := 0; i < retry; i++ {
+				lib_content_, erro := req.Get(strings.ReplaceAll(lib_url, "https://libraries.minecraft.net/", "https://bmclapi2.bangbang93.com/maven/"))
+				if erro != nil {
+					continue
+				}
+				lib_content = lib_content_
+				goto WRITE_LIB
+			}
+			fmt.Print("Download lib failed! FILE:" + lib_url + "| ERROR:" + erro.Error() + "\n")
+			return false
+		}
+		//lib_file, _ := os.OpenFile(".minecraft/libraries/"+path+"/"+lib_filename, os.O_CREATE|os.O_TRUNC, 0666)
+		//lib_file.Close()
+	WRITE_LIB:
+		errorr := lib_content.ToFile(".minecraft/libraries/" + path + "/" + lib_filename)
+		if errorr != nil {
+			for i := 0; i < retry; i++ {
+				errorr := lib_content.ToFile(".minecraft/libraries/" + path + "/" + lib_filename)
+				if errorr != nil {
+					continue
+				}
+				return true
+			}
+			fmt.Print("Write lib failed! FILE:" + lib_url + " | ERROR:" + errorr.Error() + "\n")
+			return false
+		}
 	}
-	indexassets_waitgroup.Done()
-	runtime.Gosched()
+	return true
 }
 
 func Unzip(zipFile string, destDir string) error {
-	indexassets_waitgroup.Add(1)
 	zipReader, err := zip.OpenReader(zipFile)
-	defer indexassets_waitgroup.Done()
-	defer runtime.Gosched()
 	if err != nil {
 		return err
 	}

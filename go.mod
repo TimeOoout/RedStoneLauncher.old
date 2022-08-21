@@ -4,6 +4,7 @@ go 1.19
 
 require (
 	github.com/gin-gonic/gin v1.8.1
+	github.com/imroc/req v0.3.2
 	github.com/tidwall/gjson v1.14.2
 	github.com/winterssy/sreq v0.9.11
 )
