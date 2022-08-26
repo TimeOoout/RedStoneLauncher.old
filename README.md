@@ -4,3 +4,9 @@
 #
 * This is a minecraft launcher based on golang, which was created to meet the characteristics of RedStone Skin Station.
 * For this reason, we will not consider the compatibility of this program, nor will we provide any technical support to non RedStone Skin Station users.
+#
+> 正在优化下载功能\
+> 下一步：更新 Mojang|微软 验证，第三方登录，离线登录\
+>\
+> Optimizing download\
+> Next: update Mojang | Microsoft authentication, third-party login, offline login
