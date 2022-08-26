@@ -1,4 +1,4 @@
-module Learning
+module RedStoneLauncher
 
 go 1.19
 
