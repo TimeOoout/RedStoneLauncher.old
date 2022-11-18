@@ -86,6 +86,8 @@ var DownloadRetryTimes = 5
 
 var Current_game_list = ""
 
-var download_limit = NewGoLimit(1280)
+var download_limit = NewGoLimit(240)
+
+//NewGoLimit(1280)
 
 var redownload_list = ""
