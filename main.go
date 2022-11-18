@@ -8,6 +8,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/winterssy/sreq"
 	"os"
+	"runtime"
 	"strconv"
 )
 
@@ -21,6 +22,11 @@ import (
 //}
 
 func main() {
+
+	cpuNum := runtime.NumCPU() //获得当前设备的cpu核心数
+	fmt.Println("cpu核心数:", cpuNum)
+	runtime.GOMAXPROCS(cpuNum)
+
 	//Default返回一个默认的路由引擎
 
 	os.Remove(".\\RSL.json")
